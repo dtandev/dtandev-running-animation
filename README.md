@@ -6,6 +6,10 @@ A dot moves along the route on a map while time, distance, pace, elevation and h
 
 By [Dariusz Tanajewski](https://dtanajewski.com).
 
+![A generated animation: coloured track on a satellite map, a photo pin, live stats and the elevation profile with camera badges](docs/example-animation.jpg)
+
+The page above comes from a real skating marathon: the track is coloured by pace, the photo pin has appeared because the runner passed it, and the camera badges on the elevation profile mark where the other photos are. The finished file is in [examples/mazurski-maraton-rolkowy](examples/mazurski-maraton-rolkowy).
+
 ## Install
 
 Requires Python 3.11+, [uv](https://github.com/astral-sh/uv) and, optionally, [just](https://github.com/casey/just).
