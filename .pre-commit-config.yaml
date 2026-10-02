@@ -34,3 +34,5 @@ repos:
     hooks:
       - id: detect-secrets
         args: ["--baseline", ".secrets.baseline"]
+        # generated example animations embed the photos as base64, which looks like secrets
+        exclude: ^examples/.*\.html$

@@ -35,6 +35,10 @@ training_gpx/
 *.gpx
 data/
 
+# ...except the bundled example, which is meant to be public
+!examples/
+!examples/**
+
 # IDE
 .idea/
 .vscode/
