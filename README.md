@@ -38,6 +38,10 @@ The animation is written to `data/output/<event-name>.html`. Open it in a browse
 | `--photo-utc-offset H` | UTC offset of the camera clock, for photos placed by capture time (default: inferred). |
 | `--photo-max-distance M` | Max distance between a GPS-tagged photo and the track (default 50 m). |
 
+## Example
+
+[examples/mazurski-maraton-rolkowy](examples/mazurski-maraton-rolkowy) holds a finished animation together with everything needed to regenerate it: the GPX track, four photos and the logo. Download the `.html` file from there and open it in a browser. The positions of the photos in that example are illustrative, see its README.
+
 ## Where photos land on the track
 
 Decided per photo, the first method that works wins:
