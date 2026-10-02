@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  html, body { height: 100%; margin: 0; font-family: system-ui, sans-serif; }
+  #app { display: flex; flex-direction: column; height: 100%; }
+  #header { display: flex; align-items: center; gap: 14px; padding: 6px 14px; background: #fff; border-bottom: 1px solid #ddd; }
+  #header[hidden] { display: none; }
+  #logo { height: 44px; max-width: 220px; object-fit: contain; }
+  #title { font-size: 20px; font-weight: 600; color: #1b1f24; }
+  #map { flex: 1; min-height: 0; }
+  #panel { background: #1b1f24; color: #e8eaed; padding: 8px 14px 10px; }
+  #stats { display: flex; gap: 22px; flex-wrap: wrap; align-items: baseline; }
+  .stat .v { font-size: 22px; font-variant-numeric: tabular-nums; }
+  .stat .l { font-size: 11px; color: #9aa0a6; text-transform: uppercase; }
+  #controls { display: flex; gap: 10px; align-items: center; margin-top: 6px; }
+  #controls button { background: #3b82f6; color: #fff; border: 0; border-radius: 4px;
+                     padding: 5px 14px; cursor: pointer; font-size: 14px; }
+  #scrub { flex: 1; }
+  #profile { width: 100%; height: 92px; display: block; margin-top: 6px; cursor: pointer; }
+  .photo-pin { width: 48px; height: 48px; border: 3px solid #fff; border-radius: 6px;
+               box-shadow: 0 2px 6px rgba(0,0,0,.5); background-size: cover; position: relative; }
+  .photo-pin::after { content: ""; position: absolute; left: 50%; bottom: -10px; margin-left: -6px;
+                      border: 6px solid transparent; border-top-color: #fff; }
+  .runner { width: 16px; height: 16px; background: #ef4444; border: 3px solid #fff;
+            border-radius: 50%; box-shadow: 0 0 6px rgba(0,0,0,.6); }
+  .legend { background: rgba(255,255,255,.92); padding: 6px 8px; border-radius: 5px; font-size: 11px; color: #222; width: 170px; }
+  .legend .tabs { display: flex; gap: 4px; margin-bottom: 6px; }
+  .legend .tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 4px 0 3px;
+                 border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; color: #475569; cursor: pointer; font: inherit; }
+  .legend .tab svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8;
+                     stroke-linecap: round; stroke-linejoin: round; }
+  .legend .tab:hover { background: #f1f5f9; }
+  .legend .tab.active { background: #2563eb; border-color: #2563eb; color: #fff; }
+  #legend-bar { height: 8px; border-radius: 4px; }
+  .legend .lr { display: flex; justify-content: space-between; margin-top: 2px; }
+  .leaflet-popup-content { margin: 8px; }
+  .leaflet-popup-content .cap { font-size: 11px; color: #64748b; margin-top: 4px; }
+  .leaflet-popup-content img { width: min(440px, 75vw); display: block; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="header" hidden><img id="logo" alt=""><span id="title"></span></div>
+  <div id="map"></div>
+  <div id="panel">
+    <div id="stats">
+      <div class="stat"><div class="v" id="s-time">0:00</div><div class="l">time</div></div>
+      <div class="stat"><div class="v" id="s-dist">0.00</div><div class="l">km</div></div>
+      <div class="stat"><div class="v" id="s-pace">–</div><div class="l">pace min/km</div></div>
+      <div class="stat"><div class="v" id="s-ele">–</div><div class="l">elevation m</div></div>
+      <div class="stat"><div class="v" id="s-hr">–</div><div class="l">heart rate</div></div>
+      <div class="stat" style="margin-left:auto"><div class="l" id="summary"></div></div>
+    </div>
+    <div id="controls">
+      <button id="play">Play</button>
+      <input type="range" id="scrub" min="0" max="1000" value="0">
+      <label>speed
+        <select id="speed">
+          <option value="10">10×</option><option value="30">30×</option>
+          <option value="60" selected>60×</option><option value="120">120×</option>
+          <option value="300">300×</option>
+        </select>
+      </label>
+    </div>
+    <canvas id="profile"></canvas>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const D = __DATA__;
+const N = D.t.length;
+const fmtTime = s => { s = Math.floor(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
+  return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(x).padStart(2, "0"); };
+const fmtPace = p => { if (p == null) return "–"; const m = Math.floor(p), s = Math.round((p - m) * 60);
+  return s === 60 ? (m + 1) + ":00" : m + ":" + String(s).padStart(2, "0"); };
+
+const map = L.map("map", { preferCanvas: true });
+// CARTO's free raster tiles now answer with an "API KEY REQUIRED" watermark, so they are not used.
+const OSM_ATTR = "&copy; OpenStreetMap contributors";
+const base = {
+  "Satellite (Esri)": L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    { maxZoom: 19, attribution: "Tiles &copy; Esri, Maxar, Earthstar Geographics" }),
+  "OpenStreetMap": L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    { maxZoom: 19, attribution: OSM_ATTR }),
+};
+base["Satellite (Esri)"].addTo(map);
+L.control.layers(base, null, { position: "topright" }).addTo(map);
+const coords = D.lat.map((la, i) => [la, D.lon[i]]);
+L.polyline(coords, { color: "#94a3b8", weight: 3, opacity: .6 }).addTo(map);
+
+// Track coloured by a chosen metric. Colour scale: blue = low, red = high, so "red" always means
+// more intensity (faster, higher heart rate, higher ground). Pace is converted to speed for that.
+const METRICS = {
+  pace: { label: "Pace", get: i => D.pace[i] == null ? null : 60 / D.pace[i], fmt: v => fmtPace(60 / v) + " /km", invert: true },
+  hr:   { label: "Heart rate", get: i => D.hr[i], fmt: v => Math.round(v) + " bpm" },
+  ele:  { label: "Elevation", get: i => D.ele[i], fmt: v => Math.round(v) + " m" },
+};
+const STOPS = [[59,76,192], [31,162,196], [92,184,92], [240,160,48], [215,48,31]];
+function scaleColor(t) {
+  t = Math.max(0, Math.min(1, t)) * (STOPS.length - 1);
+  const k = Math.min(Math.floor(t), STOPS.length - 2), f = t - k;
+  return "rgb(" + STOPS[k].map((c, j) => Math.round(c + (STOPS[k + 1][j] - c) * f)).join(",") + ")";
+}
+const ICONS = {
+  pace: '<svg viewBox="0 0 24 24"><circle cx="12" cy="13.5" r="7.5"/><path d="M12 13.5V9.5M9.5 3h5M12 3v3M18.5 6.5l1.3-1.3"/></svg>',
+  hr:   '<svg viewBox="0 0 24 24"><path d="M12 20.5s-8-4.9-8-10.6A4.5 4.5 0 0 1 12 7a4.5 4.5 0 0 1 8 2.9c0 5.7-8 10.6-8 10.6z"/><path d="M5.5 12.5h3l1.5-2.5 2.5 5 1.5-2.5h4.5" stroke-width="1.5"/></svg>',
+  ele:  '<svg viewBox="0 0 24 24"><path d="M2.5 19.5l6.5-11 4 6.5 2.5-3.5 6 8z"/><path d="M7.5 11.5l1.5-1.5 1.5 1.5" stroke-width="1.4"/></svg>',
+};
+const SHORT = { pace: "Pace", hr: "Heart", ele: "Elevation" };
+const CHUNK = 15;                      // points per coloured segment
+const doneGroup = L.layerGroup().addTo(map);
+let metric = "pace", segs = [], shown = 0, tail = null, lo = 0, hi = 1;
+function buildSegments() {
+  const m = METRICS[metric];
+  const vals = []; for (let i = 0; i < N; i++) { const v = m.get(i); if (v != null) vals.push(v); }
+  vals.sort((a, b) => a - b);
+  // 5th-95th percentile, so one GPS spike does not flatten the whole scale
+  lo = vals.length ? vals[Math.floor(vals.length * .05)] : 0;
+  hi = vals.length ? vals[Math.floor(vals.length * .95)] : 1;
+  if (hi <= lo) hi = lo + 1;
+  segs = [];
+  for (let a = 0; a < N - 1; a += CHUNK) {
+    const b = Math.min(a + CHUNK, N - 1);
+    let sum = 0, n = 0; for (let i = a; i <= b; i++) { const v = m.get(i); if (v != null) { sum += v; n++; } }
+    segs.push({ a, b, color: n ? scaleColor((sum / n - lo) / (hi - lo)) : "#94a3b8" });
+  }
+  doneGroup.clearLayers(); shown = 0; tail = null;
+  const lg = document.getElementById("legend-bar");
+  lg.style.background = "linear-gradient(90deg," + STOPS.map(c => "rgb(" + c + ")").join(",") + ")";
+  const lo_t = m.invert ? m.fmt(hi) : m.fmt(lo), hi_t = m.invert ? m.fmt(lo) : m.fmt(hi);
+  document.getElementById("legend-lo").textContent = lo_t;
+  document.getElementById("legend-hi").textContent = hi_t;
+}
+function updateTrack(idx) {
+  // fully passed segments are added/removed incrementally, the current one is drawn as a tail
+  let want = 0; while (want < segs.length && segs[want].b <= idx) want++;
+  while (shown < want) { const s = segs[shown];
+    s.layer = s.layer || L.polyline(coords.slice(s.a, s.b + 1), { color: s.color, weight: 5, opacity: .95 });
+    s.layer.addTo(doneGroup); shown++; }
+  while (shown > want) { shown--; doneGroup.removeLayer(segs[shown].layer); }
+  if (tail) { doneGroup.removeLayer(tail); tail = null; }
+  if (shown < segs.length && idx > segs[shown].a) {
+    tail = L.polyline(coords.slice(segs[shown].a, idx + 1), { color: segs[shown].color, weight: 5, opacity: .95 }).addTo(doneGroup);
+  }
+}
+const legend = L.control({ position: "bottomleft" });
+legend.onAdd = () => { const d = L.DomUtil.create("div", "legend");
+  d.innerHTML = '<div class="tabs">' + Object.keys(METRICS).map(k =>
+    '<button type="button" class="tab" data-m="' + k + '" title="Colour track by ' + METRICS[k].label.toLowerCase() +
+    '" aria-label="' + METRICS[k].label + '">' + ICONS[k] + '<span>' + SHORT[k] + '</span></button>').join("") + '</div>' +
+    '<div id="legend-bar"></div><div class="lr"><span id="legend-lo"></span><span id="legend-hi"></span></div>';
+  L.DomEvent.disableClickPropagation(d); return d; };
+legend.addTo(map);
+function setMetric(k) {
+  metric = k; buildSegments(); updateTrack(cur);
+  document.querySelectorAll(".legend .tab").forEach(b => b.classList.toggle("active", b.dataset.m === k));
+}
+document.querySelectorAll(".legend .tab").forEach(b => { b.onclick = () => setMetric(b.dataset.m); });
+map.fitBounds(L.polyline(coords).getBounds(), { padding: [30, 30] });
+const runner = L.marker(coords[0], { icon: L.divIcon({ className: "", html: '<div class="runner"></div>',
+  iconSize: [16, 16], iconAnchor: [8, 8] }), zIndexOffset: 1000 }).addTo(map);
+
+// Photo pins appear once the runner has passed the photo's position on the track.
+const pins = D.photos.map(ph => ({ ph, marker: null }));
+// Pins whose position is not a GPS fix say so, so nobody mistakes a guess for a measurement.
+const CAPTIONS = { time: "Position estimated from the photo's capture time",
+                   assumed: "Position approximate (photos assumed to be taken 10 min apart)" };
+function showPin(pin) {
+  const ph = pin.ph;
+  const icon = L.divIcon({ className: "", iconSize: [48, 58], iconAnchor: [24, 58], popupAnchor: [0, -58],
+    html: '<div class="photo-pin" style="background-image:url(data:image/jpeg;base64,' + ph.thumb + ')"></div>' });
+  pin.marker = L.marker([ph.lat, ph.lon], { icon }).addTo(map)
+    .bindPopup('<img src="data:image/jpeg;base64,' + ph.full + '" alt="' + ph.name.replace(/"/g, "") + '">' +
+               (CAPTIONS[ph.source] ? '<div class="cap">' + CAPTIONS[ph.source] + '</div>' : ""),
+               { maxWidth: 480, minWidth: 200 });
+}
+
+// Elevation profile. Photo positions are marked with an camera badge in a strip
+// above the profile; icons of photos the runner has not reached yet are dimmed.
+const ICON_ZONE = 26;
+function roundRect(c, x, y, w, h, r) {
+  c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath();
+}
+function drawCameraIcon(cx, cy, reached) {
+  // Badge with a camera glyph and a small tail pointing at the exact spot on the profile.
+  const W = 24, H = 18, x = cx - W / 2, y = cy - H / 2, badge = reached ? "#2563eb" : "#64748b";
+  ctx.save(); ctx.globalAlpha = reached ? 1 : .6;
+  ctx.strokeStyle = "#fff"; ctx.globalAlpha *= .5; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(cx, y + H + 5); ctx.lineTo(cx, cv.clientHeight); ctx.stroke();   // guide line
+  ctx.globalAlpha = reached ? 1 : .6;
+  ctx.fillStyle = badge; ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5;
+  roundRect(ctx, x, y, W, H, 5); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx - 4, y + H); ctx.lineTo(cx, y + H + 5); ctx.lineTo(cx + 4, y + H);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = badge; ctx.fillRect(cx - 3.5, y + H - 1.2, 7, 2.4);                           // hide seam
+  ctx.fillStyle = "#fff";
+  ctx.beginPath(); ctx.moveTo(cx - 3.5, y + 4.5); ctx.lineTo(cx - 2.2, y + 3); ctx.lineTo(cx + 2.2, y + 3);
+  ctx.lineTo(cx + 3.5, y + 4.5); ctx.closePath(); ctx.fill();                                    // top bump
+  roundRect(ctx, cx - 8, y + 4.5, 16, 9.5, 2); ctx.fill();                                       // body
+  ctx.fillStyle = badge; ctx.beginPath(); ctx.arc(cx, y + 9.3, 3.4, 0, 7); ctx.fill();           // lens
+  ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(cx, y + 9.3, 1.6, 0, 7); ctx.fill();
+  ctx.restore();
+}
+const cv = document.getElementById("profile"), ctx = cv.getContext("2d");
+const eles = D.ele.filter(e => e != null);
+const eMin = Math.min(...eles), eMax = Math.max(...eles);
+function drawProfile(idx) {
+  const dpr = devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+  cv.width = w * dpr; cv.height = h * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const X = i => D.dist[i] / D.total_m * w, Y = e => h - 4 - (e - eMin) / Math.max(eMax - eMin, 1) * (h - ICON_ZONE - 6);
+  ctx.beginPath(); ctx.moveTo(0, h);
+  let last = eMin; for (let i = 0; i < N; i++) { if (D.ele[i] != null) last = D.ele[i]; ctx.lineTo(X(i), Y(last)); }
+  ctx.lineTo(w, h); ctx.closePath(); ctx.fillStyle = "#334155"; ctx.fill();
+  ctx.save(); ctx.beginPath(); ctx.rect(0, 0, X(idx), h); ctx.clip();
+  ctx.beginPath(); ctx.moveTo(0, h);
+  last = eMin; for (let i = 0; i < N; i++) { if (D.ele[i] != null) last = D.ele[i]; ctx.lineTo(X(i), Y(last)); }
+  ctx.lineTo(w, h); ctx.closePath(); ctx.fillStyle = "#ef4444"; ctx.fill(); ctx.restore();
+  D.photos.forEach(ph => drawCameraIcon(Math.min(Math.max(X(ph.idx), 11), w - 11), 12, ph.idx <= idx));
+  ctx.fillStyle = "#9aa0a6"; ctx.font = "10px system-ui";
+  ctx.fillText(Math.round(eMax) + " m", 4, ICON_ZONE + 8); ctx.fillText(Math.round(eMin) + " m", 4, h - 6);
+}
+
+let cur = 0, playing = false, tNow = 0, lastFrame = 0;
+function render(idx) {
+  cur = idx;
+  runner.setLatLng(coords[idx]);
+  updateTrack(idx);
+  pins.forEach((p, k) => { if (!p.marker && p.ph.idx <= idx) showPin(p);
+                           else if (p.marker && p.ph.idx > idx) { map.removeLayer(p.marker); p.marker = null; } });
+  document.getElementById("s-time").textContent = fmtTime(D.t[idx]);
+  document.getElementById("s-dist").textContent = (D.dist[idx] / 1000).toFixed(2);
+  document.getElementById("s-pace").textContent = fmtPace(D.pace[idx]);
+  document.getElementById("s-ele").textContent = D.ele[idx] == null ? "–" : Math.round(D.ele[idx]);
+  document.getElementById("s-hr").textContent = D.hr[idx] == null ? "–" : D.hr[idx];
+  document.getElementById("scrub").value = Math.round(D.t[idx] / D.total_s * 1000);
+  drawProfile(idx);
+}
+function indexAt(t) { let lo = 0, hi = N - 1;
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (D.t[m] <= t) lo = m; else hi = m - 1; } return lo; }
+function seek(t) { tNow = Math.max(0, Math.min(D.total_s, t)); render(indexAt(tNow)); }
+
+function frame(ts) {
+  if (!playing) return;
+  const speed = +document.getElementById("speed").value;
+  if (lastFrame) seek(tNow + (ts - lastFrame) / 1000 * speed);
+  lastFrame = ts;
+  if (tNow >= D.total_s) { setPlaying(false); return; }
+  requestAnimationFrame(frame);
+}
+function setPlaying(on) {
+  playing = on; lastFrame = 0;
+  document.getElementById("play").textContent = on ? "Pause" : "Play";
+  if (on) { if (tNow >= D.total_s) seek(0); requestAnimationFrame(frame); }
+}
+document.getElementById("play").onclick = () => setPlaying(!playing);
+document.getElementById("scrub").oninput = e => seek(e.target.value / 1000 * D.total_s);
+cv.onclick = e => { const x = e.offsetX / cv.clientWidth * D.total_m;
+  let lo = 0, hi = N - 1; while (lo < hi) { const m = (lo + hi) >> 1; if (D.dist[m] < x) lo = m + 1; else hi = m; }
+  seek(D.t[lo]); };
+window.onresize = () => drawProfile(cur);
+
+document.getElementById("summary").textContent = D.name + " · " + D.date + " · " +
+  (D.total_m / 1000).toFixed(2) + " km · " + fmtTime(D.total_s) + " · avg " + fmtPace(D.avg_pace) +
+  " /km · +" + Math.round(D.gain_m) + " m";
+if (D.logo) { document.getElementById("logo").src = D.logo; }
+if (D.logo || D.name) { document.getElementById("title").textContent = D.name; document.getElementById("header").hidden = !D.logo; }
+buildSegments();
+setMetric(metric);
+render(0);
+</script>
+</body>
+</html>
